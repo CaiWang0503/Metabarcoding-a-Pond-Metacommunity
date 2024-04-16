@@ -1,0 +1,506 @@
+---
+title: "Metabarcoding a Pond Metacommunity"
+author: "Wang Cai"
+date: "28/03/2024"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+```{r setup, include=TRUE, eval=TRUE,collapse=TRUE}
+#devtools::install_github("https://github.com/TheoreticalEcology/s-jSDM", subdir = "sjSDM", ref = "master")
+library(corrplot)
+library(cowplot)
+library(ggcorrplot)
+library(ggrepel)
+library(gtools)
+library(ggeffects)
+library(here)
+library(patchwork)
+library(performance)
+library(PerformanceAnalytics)
+library(RColorBrewer)
+library(sjSDM)
+library(tidyverse)
+library(vegan)
+library(viridis)
+library(mgcv)
+library(qgam)
+library(scales)
+#library(ggtern)#can only be used for ternary plots, conflicts with ggplot2
+library(conflicted)
+conflict_prefer("filter", "dplyr")
+conflict_prefer("select", "dplyr")
+conflict_prefer("slice", "dplyr")
+```
+ 
+```{r load data}
+dataselect="FHT"
+load("data/FHT_320_48sp_20211110.rdata")
+TP<-read.csv("data/FHT_DATA_TP_20211110.csv", header=TRUE)
+waterspecies="FALSE" # TRUE or FALSE
+species="48sp"
+if (waterspecies=="TRUE"){
+Y=data.frame(Y)%>%select(starts_with("Acti") | starts_with("Amph"))
+which(colSums(Y) == 0)
+ex=which(rowSums(Y) == 0)
+Y=Y[-ex,]
+env=env[-ex,]
+sp=sp[-ex,]
+TP<-TP %>% filter(group =="Fish" | group =="Amphibian" )
+}
+Y=as.matrix(Y)
+#which(colSums(Y) == 0)
+which(colSums(Y) < 5)
+ENV=env
+env=scale(env)
+XY=scale(sp)
+
+TP$species_name=substring(TP$species,6,)
+spnames <- colnames(Y)
+#The sjSDM models used for this study are already stored in the data/model folder.
+#Models were run by the code "model_15species.R and model_48sp.R"
+model=readRDS(paste0("data/model/model_",species,"_sjsdm_20230602.RDS"))
+an=readRDS(paste0("data/model/model_an_",species,"_sjsdm_20230602.RDS"))
+load(paste0("data/model/model_",species,"_result_20230602.rdata"))
+```
+
+#Figure 3 and 4: environmental covariance and biotic covariance
+```{r}
+spnames <- data.frame(colnames(Y))
+source("code/function_barplot.R")
+plot.coef=coef.figure(summary.p)
+plot.coef
+
+#figure 4: biotic covariance
+#co.env.spe <- cov2cor(getCov(model)) #get from loading model result 
+spnames <- data.frame(colnames(Y))
+spnames2<-separate(spnames,colnames.Y.,c("o","g","species"),sep= "_")
+spnames2 <- spnames2 %>%
+  mutate(
+    o = case_when(
+      o == "Acti"  ~ "Fish",
+      o == "Amph"  ~ "Amphibians",
+      o == "Aves"  ~ "Perching birds",
+      o == "Dmst"  ~ "Domestic animals",
+      o == "Mamm"  ~ "Mammal",
+      o == "Wafl"  ~ "Waterfowl",
+      TRUE ~ as.character(o)
+    )
+  )
+spnames2<-paste0(spnames2$o," ",spnames2$g," ",spnames2$species)
+rownames(co.env.spe) <- spnames2
+colnames(co.env.spe) <- spnames2
+col2 <- colorRampPalette(rev(c("#67001F", "#B2182B", "#D6604D", "#F4A582", "#FDDBC7",
+			"#FFFFFF", "#D1E5F0", "#92C5DE", "#4393C3", "#2166AC", "#053061")))
+#figure 4A:
+corrplot(co.env.spe,method = "ellipse",shade.col = NA, order = "alphabet",tl.col ="black",hclust.method = "centroid",tl.srt = 10,type="lower",tl.cex = 0.4,col=col2(200),number.font = 4)
+
+#figure 4B: select the top 5% highest value (both negative and positive)
+co.env.spe2=co.env.spe
+co.env.spe3=co.env.spe
+co.env.spe2[which(co.env.spe2 == 1)]= 0
+spno=15 #This is the number of the species in the dataset, need to change to 48, if use the 48 species dataset. 
+choose=(choose(spno,2)+spno)*0.025*2
+top=arrayInd(sort.list(co.env.spe2,decreasing=F)[1:choose],dim(co.env.spe2))# top 5%
+top=as.data.frame(top)
+length=length(top$V1)
+biggest=co.env.spe2[top$V1[1],top$V2[1]]
+smallest=co.env.spe2[top$V1[length],top$V2[length]]
+
+#for extracting only minus
+co.env.spe[which(co.env.spe>smallest & co.env.spe<0)]=0
+co.env.spe3=abs(co.env.spe3)
+co.env.spe3[which(co.env.spe3 == 1)]= 0
+choose=(choose(spno,2)+spno)*0.025*2
+top=arrayInd(sort.list(co.env.spe3,decreasing=T)[1:choose],dim(co.env.spe3))# top 5%
+top=as.data.frame(top)
+length=length(top$V1)
+biggest=co.env.spe3[top$V1[1],top$V2[1]]
+smallest=co.env.spe3[top$V1[length],top$V2[length]]
+co.env.spe[which(co.env.spe>0 & co.env.spe<smallest)]=0
+
+corrplot(co.env.spe,method = "ellipse",shade.col = NA, order = "alphabet",tl.col ="black",hclust.method = "centroid",tl.srt = 10,type="lower",tl.cex = 0.4,col=col2(200),number.font = 4)
+```
+
+#Figure 2: internal structure of metacommunity 
+```{r get an data object}
+x=an
+type="R2_McFadden"
+#x$species$R2_McFadden_shared
+#modify by the original plot.anova from sjsdm package
+internals = list()
+df = data.frame(
+        env = ifelse(x$sites[[type]]$F_A<0, 0, x$sites[[type]]$F_A),
+          spa = ifelse(x$sites[[type]]$F_S<0, 0, x$sites[[type]]$F_S),
+          codist = ifelse(x$sites[[type]]$F_B<0, 0, x$sites[[type]]$F_B),
+          r2  = ifelse(x$sites[[type]]$Full<0, 0, x$sites[[type]]$Full)
+      )
+    internals[[1]] = df
+    names(internals)[1] = "Sites"
+
+df = data.frame(
+        env = ifelse(x$species[[type]]$F_A<0, 0, x$species[[type]]$F_A),
+          spa = ifelse(x$species[[type]]$F_S<0, 0, x$species[[type]]$F_S),
+          codist = ifelse(x$species[[type]]$F_B<0, 0, x$species[[type]]$F_B),
+          r2  = ifelse(x$species[[type]]$Full<0, 0, x$species[[type]]$Full),
+        group=NA,
+        name=TP$species_name,
+        sp=model$species
+      )
+df$sp<-as.character(df$sp)
+
+  
+if (waterspecies=="FALSE") { 
+  df$group[grep("Acti*",df$sp)]="Fish"
+  df$group[grep("Amph*",df$sp)]="Amphibians"
+  df$group[grep("Mamm*",df$sp)]="Mammal"
+  df$group[grep("Aves*",df$sp)]="Perching birds"
+  df$group[grep("Wafl",df$sp)]="Waterfowl"
+  df$group[grep("Dmst",df$sp)]="Domestic animals"
+  df=df %>% select (-sp)
+  df$group=factor(df$group,levels = c('Fish','Amphibians','Perching birds','Domestic animals','Mammal','Waterfowl')) 
+}
+if (waterspecies=="TRUE") { 
+  df$group[grep("Acti*",df$sp)]="Fish"
+  df$group[grep("Amph*",df$sp)]="Amphibians"
+  df=df %>% select (-sp)
+  df$group=factor(df$group,levels = c('Amphibians','Fish')) 
+  }
+
+internals[[2]] = df
+names(internals)[2] = "Species"
+```
+
+```{r formatting data for site plot}
+SP=data.frame(sp)
+OTU=data.frame(Y)
+Env=data.frame(env)
+indexdata=cbind(Env,SP)
+indexdata$richness=rowSums(Y)
+indexdata.OTU=cbind(indexdata,OTU)
+rm(SP,OTU,Env)
+site.date=data.frame(internals[[1]])
+indexdata.OTU2=cbind(indexdata.OTU,site.date)
+#does r2 =0 is meaning for the sites?
+#site.date=site.date %>% filter(r2!=0)
+#indexdata.OTU2=indexdata.OTU2 %>% filter(r2!=0)
+indexdata.OTU2$r2=site.date$r2
+indexdata.OTU2$env=site.date$env
+indexdata.OTU2$spa=site.date$spa
+indexdata.OTU2$codist=site.date$codist
+```
+
+plot Figure 2 A,C
+```{r options for species ternary}
+library(ggtern)
+top = 1
+r2max = ceiling(max(internals[[2]]$r2)*1e2)/1e2
+internals.name=data.frame(name=internals[[2]]$name)
+internals.name<-separate(internals.name,name,c("g","species"),sep= "_")
+internals.name<-paste0(internals.name$g," ",internals.name$species)
+internals[[2]]$name=internals.name
+#col=c("#d55e00ff","#56b4e9cc") 
+ 
+ggtern::ggtern(internals[[2]], ggplot2::aes(x = env, z = spa, y = codist, size = r2,color =group)) +
+  ggtern::scale_T_continuous(limits=c(0,1),
+                             breaks=seq(0, 1,by=0.2),
+                             labels=seq(0,1, by= 0.2)) +
+  ggtern::scale_L_continuous(limits=c(0,1),
+                             breaks=seq(0, 1,by=0.2),
+                             labels=seq(0, 1,by=0.2)) +
+  ggtern::scale_R_continuous(limits=c(0,1),
+                             breaks=seq(0, 1,by=0.2),
+                             labels=seq(0, 1,by=0.2)) +
+  ggplot2::labs(title = names(internals)[2],
+                x = "E",
+                xarrow = "Environment",
+                y = "C",
+                yarrow = "Co-Distribution",
+                z = "S", 
+                zarrow = "Space") +
+  ggtern::theme_bw() +
+  ggtern::theme_showarrows() +
+  ggtern::theme_arrowlong() +
+  ggplot2::theme(
+    panel.grid = ggplot2::element_line(color = "darkgrey", linewidth = 0.3),
+    plot.tag = ggplot2::element_text(size = 11),
+    plot.title = ggplot2::element_text(size = 11, hjust = 0.1 , margin = ggplot2::margin(t = 10, b = -20)),
+    tern.axis.arrow = ggplot2::element_line(linewidth = 1),
+    tern.axis.arrow.text = ggplot2::element_text(size = 6),
+    axis.text = ggplot2::element_text(size = 4),
+    axis.title = ggplot2::element_text(size = 6),
+    legend.text = ggplot2::element_text(size = 6),
+    legend.title = ggplot2::element_text(size = 8),
+    strip.text = ggplot2::element_text(size = 8),
+    plot.margin = unit(c(top,1,1,1)*0.2, "cm"),
+    strip.background = ggplot2::element_rect(color = NA),
+  ) +
+  ggplot2::theme(tern.axis.arrow.text = element_text(size = 7),legend.position = "bottom", legend.margin = margin(r = 30), legend.box="vertical")+
+  ggplot2::guides(size = ggplot2::guide_legend(title = expression(R^2), order = 1, nrow = 1, label.position = "bottom"), color = ggplot2::guide_legend(title = "Species grouping", title.position = "top", order = 2, barheight = 0.5, barwidth = 8))+
+  scale_color_viridis(option="D",discrete=TRUE)+
+  geom_point(alpha = 0.7,position= position_jitter_tern(x=0.01, y=0.01, z=0.00))+
+  geom_text(label=internals[[2]]$name,alpha = 0.6,size=1,col="black",check_overlap = F,show.legend = F,fontface = "italic")+ggtern::theme_nomask()
+```
+
+plot Figure 2 B,D
+```{r options for sites ternaries}
+#options for sites ternary
+top = 7
+r2max = ceiling(max(site.date$r2)*1e2)/1e2
+
+ggtern::ggtern(site.date, ggplot2::aes(x = env, z = spa, y = codist, size = r2)) +
+     ggtern::scale_T_continuous(limits=c(0,1),
+                               breaks=seq(0, 1,by=0.2),
+                               labels=seq(0,1, by= 0.2)) +
+    ggtern::scale_L_continuous(limits=c(0,1),
+                               breaks=seq(0, 1,by=0.2),
+                               labels=seq(0, 1,by=0.2)) +
+    ggtern::scale_R_continuous(limits=c(0,1),
+                               breaks=seq(0, 1,by=0.2),
+                               labels=seq(0, 1,by=0.2)) +
+    ggplot2::labs(title = names(internals)[1],
+                  x = "E",
+                  xarrow = "Environment",
+                  y = "C",
+                  yarrow = "Co-Distribution",
+                  z = "S", 
+                  zarrow = "Space") +
+    ggtern::theme_bw() +
+    ggtern::theme_showarrows() +
+    ggtern::theme_arrowlong() +
+    ggplot2::theme(
+      panel.grid = ggplot2::element_line(color = "darkgrey", linewidth = 0.3),
+      plot.tag = ggplot2::element_text(size = 11),
+      plot.title = ggplot2::element_text(size = 11, hjust = 0.1 , margin = ggplot2::margin(t = 10, b = -20)),
+      tern.axis.arrow = ggplot2::element_line(linewidth = 1),
+      tern.axis.arrow.text = ggplot2::element_text(size = 6),
+      axis.text = ggplot2::element_text(size = 4),
+      axis.title = ggplot2::element_text(size = 6),
+      legend.text = ggplot2::element_text(size = 6),
+      legend.title = ggplot2::element_text(size = 8),
+      strip.text = ggplot2::element_text(size = 8),
+      plot.margin = unit(c(top,1,1,1)*0.2, "cm"),
+      strip.background = ggplot2::element_rect(color = NA),
+    ) + 
+  ggplot2::theme(tern.axis.arrow.text = element_text(size = 7),legend.position = "bottom", legend.margin = margin(r = 30), legend.box="vertical") +
+ggplot2::scale_size_continuous(range = c(2,7),limits = c(0, r2max), breaks = seq(0.0001, r2max, length.out=5))+
+  ggplot2::guides(size = ggplot2::guide_legend(title = expression(R^2), order = 1, nrow = 1, label.position = "bottom"))+
+  geom_point(alpha = 0.8, position= position_jitter_tern(x=0.02, y=0.02, z=0.02),color="#666666") +ggtern::theme_nomask() 
+```
+
+#Figure 6:projection of species distribution
+
+```{r AUC plot}
+species="15sp"
+load(paste0("data/model/model_",species,"_AUC_20230602.rdata"))
+spnames <- colnames(Y)
+auc<-data.frame(sp=spnames,e.aucs=train_aucs,p.aucs=test_aucs,animalclass=TP$group,incidence=TP$inc.FHT,r2=internals[[2]]$r2)  
+auc$sp2=substring(auc$sp,6,)
+auc <- auc %>%
+  mutate(
+    animalclass = case_when(
+      animalclass == "Amphibian" ~ "Amphibians",
+      animalclass == "Other Bird" ~ "Perching birds",
+      animalclass == "Domestic" ~ "Domestic animals",
+      TRUE ~ as.character(animalclass)
+    )
+  )
+aucplot<- function(auc) {
+  mean.e=signif(mean(auc$e.aucs,na.rm = T),digits = 2)  
+  mean.p=signif(mean(auc$p.aucs,na.rm = T),digits = 2) 
+  auc$animalclass=factor(auc$animalclass,levels = c('Amphibians','Fish','Perching birds','Domestic animals','Mammal','Waterfowl')) 
+  ggplot(auc,aes(x =e.aucs, y =p.aucs, color = animalclass,size=incidence))+
+  scale_color_viridis(option="D",discrete=TRUE)+
+  xlab("explanatory AUC") + 
+  ylab("predictive AUC") + 
+  xlim(0.3,1)+
+  ylim(0.3,1)+
+  geom_abline(intercept=0,slope=1,colour='azure3')+
+  geom_hline(yintercept = 0.5,colour='azure3')+
+  geom_vline(xintercept = 0.5,colour='azure3')+
+  geom_hline(yintercept = mean.p,linetype="dotted")+
+  geom_vline(xintercept = mean.e,linetype="dotted")+
+  labs(fill="Species Index") + 
+  geom_point()+ 
+  ggplot2::annotate("text",label=mean.p, x = 0.45, y = mean.p+0.02)+
+  ggplot2::annotate("text",label=mean.e, x = 0.75, y = 0.4)+
+  theme(panel.grid.major =element_blank(), panel.grid.minor  =element_blank(),panel.background = element_blank(),panel.border = element_blank())+
+    geom_text_repel(aes(e.aucs, p.aucs, label=sp2,size=20,fontface = "italic"),show.legend = FALSE)
+}
+aucplot(auc) 
+```
+
+
+#Figure 5:estimate env. and spatial distinctiveness
+```{r data set up}
+#rm(list=ls())
+m=an
+rr = plot(m, internal = TRUE, add_shared = FALSE)
+coefs = t(coef(model)[[1]][[1]])
+env_X = (model$data$X)
+env = model$data$X[,-1]
+env2=data.frame(env)
+dim(coefs)
+cols = c("#A38310", "#B42398", "#20A382")
+```
+
+```{r plot}
+EE = scale((XY))
+D = as.matrix(dist(EE))
+D = D - rowMeans(D)
+v = eigen(as.matrix(dist(EE)))$vectors
+ee = ((v %*% EE)[,1])
+ee= abs(v[,1])
+data.suniq=data.frame(environmental=rr$data$Sites[,1],spatial=rr$data$Sites[,2],"biotic covariance"=rr$data$Sites[,3])
+data=as.matrix(data.suniq)
+data <- reshape2::melt(data)
+colnames(data)=c("ee","r2","cov")
+data$ee=as.numeric(ee)
+
+cols = c("#A38310", "#B42398", "#20A382")
+p1=ggplot(data,aes(x =ee, y =cov, color = r2))+ xlab("Geographical distinctiveness") + 
+  ylab(expression(paste("Site Partial"," ",R^2))) + 
+  ylim(0, 0.6)+
+  xlim(min(ee), max(ee))+
+  geom_point(alpha=0.2)+scale_color_manual(values = cols)+
+  theme_classic()+
+  geom_line(aes(ee[order(ee)], predict(qgam( Y ~ (ee), data = data.frame(Y = rr$data$Sites[,1], ee = ee), qu = 0.5), newdata = data.frame(ee = ee))[order(ee)]),col = cols[1],lty =2-(summary(qgam( Y ~ (ee), data = data.frame(Y = rr$data$Sites[,1], ee = ee), qu = 0.5))$p.table[2,4] < 0.05))+
+  geom_line(aes(ee[order(ee)], predict(qgam( Y ~ (ee), data = data.frame(Y = rr$data$Sites[,2], ee = ee), qu = 0.5), newdata = data.frame(ee = ee))[order(ee)]),col = cols[2],lty =2-(summary(qgam( Y ~ (ee), data = data.frame(Y = rr$data$Sites[,2], ee = ee), qu = 0.5))$p.table[2,4] < 0.05))+
+  geom_line(aes(ee[order(ee)], predict(qgam( Y ~ (ee), data = data.frame(Y = rr$data$Sites[,3], ee = ee), qu = 0.5), newdata = data.frame(ee = ee))[order(ee)]),col = cols[3], lty =2-(summary(qgam( Y ~ (ee), data = data.frame(Y = rr$data$Sites[,3], ee = ee), qu = 0.5))$p.table[2,4] < 0.05))+guides(color=guide_legend(title=expression(R^2)))
+
+
+EE = scale((env))
+D = as.matrix(dist(EE))
+D = D - rowMeans(D)
+v = eigen(as.matrix(dist(EE)))$vectors
+ee = ((v %*% EE)[,1])
+ee= abs(v[,1])
+data.suniq=data.frame(environmental=rr$data$Sites[,1],spatial=rr$data$Sites[,2],"biotic covariance"=rr$data$Sites[,3])
+data=as.matrix(data.suniq)
+data <- reshape2::melt(data)
+colnames(data)=c("ee","r2","cov")
+data$ee=as.numeric(ee)
+
+p2=ggplot(data,aes(x =ee, y =cov, color = r2))+ xlab("Enviromental distinctiveness") + 
+  ylab(expression(paste("Site Partial"," ",R^2))) + 
+  ylim(0, 0.6)+
+  xlim(min(ee), max(ee))+
+  geom_point(alpha=0.2)+scale_color_manual(values = cols)+
+  theme_classic()+
+  geom_line(aes(ee[order(ee)], predict(gam( Y ~ (ee), data = data.frame(Y = rr$data$Sites[,1], ee = ee)), newdata = data.frame(ee = ee))[order(ee)]),col = cols[1],lty =2-(summary(gam( Y ~ (ee), data = data.frame(Y = rr$data$Sites[,1], ee = ee)))$p.table[2,4] < 0.05))+
+  geom_line(aes(ee[order(ee)], predict(gam( Y ~ (ee), data = data.frame(Y = rr$data$Sites[,2], ee = ee)), newdata = data.frame(ee = ee))[order(ee)]),col = cols[2],lty =2-(summary(gam( Y ~ (ee), data = data.frame(Y = rr$data$Sites[,2], ee = ee)))$p.table[2,4] < 0.05))+
+  geom_line(aes(ee[order(ee)], predict(gam( Y ~ (ee), data = data.frame(Y = rr$data$Sites[,3], ee = ee)), newdata = data.frame(ee = ee))[order(ee)]),col = cols[3], lty =2-(summary(gam( Y ~ (ee), data = data.frame(Y = rr$data$Sites[,3], ee = ee)))$p.table[2,4] < 0.05))+guides(color=guide_legend(title=expression(R^2)))
+
+i=1
+ee = env2[,i]
+name="Pond area"
+data.suniq=data.frame(environmental=rr$data$Sites[,1],spatial=rr$data$Sites[,2],"biotic covariance"=rr$data$Sites[,3])
+data=as.matrix(data.suniq)
+data <- reshape2::melt(data)
+colnames(data)=c("ee","r2","cov")
+data$ee=as.numeric(ee)
+
+p3=ggplot(data,aes(x =ee, y =cov, color = r2))+ xlab(name) + 
+  ylab(expression(paste("Site Partial"," ",R^2))) + 
+  ylim(0, 0.6)+
+  xlim(min(ee), max(ee))+
+  geom_point(alpha=0.2)+scale_color_manual(values = cols)+
+  theme_classic()+
+  geom_line(aes(ee[order(ee)], predict(qgam( Y ~ (ee), data = data.frame(Y = rr$data$Sites[,1], ee = ee), qu = 0.5), newdata = data.frame(ee = ee))[order(ee)]),col = cols[1],lty =2-(summary(qgam( Y ~ (ee), data = data.frame(Y = rr$data$Sites[,1], ee = ee), qu = 0.5))$p.table[2,4] < 0.05))+
+  geom_line(aes(ee[order(ee)], predict(qgam( Y ~ (ee), data = data.frame(Y = rr$data$Sites[,2], ee = ee), qu = 0.5), newdata = data.frame(ee = ee))[order(ee)]),col = cols[2],lty =2-(summary(qgam( Y ~ (ee), data = data.frame(Y = rr$data$Sites[,2], ee = ee), qu = 0.5))$p.table[2,4] < 0.05))+
+  geom_line(aes(ee[order(ee)], predict(qgam( Y ~ (ee), data = data.frame(Y = rr$data$Sites[,3], ee = ee), qu = 0.5), newdata = data.frame(ee = ee))[order(ee)]),col = cols[3], lty =2-(summary(qgam( Y ~ (ee), data = data.frame(Y = rr$data$Sites[,3], ee = ee), qu = 0.5))$p.table[2,4] < 0.05))+guides(color=guide_legend(title=expression(R^2)))
+
+
+cols = c("#20A382","#A38310", "#B42398")
+group = sapply(strsplit(rownames(rr$data$Species), "_"),function(x) x[[1]])
+species=sapply(strsplit(rownames(rr$data$Species), "_"),function(x) paste0(x[[2]]," ",x[[3]]))
+df = data.frame(R2 = c(rr$data$Species$env, rr$data$Species$spa, rr$data$Species$codist),
+                r2 = rep(c("environmental", "spatial", "biotic covariance"), each = nrow(rr$data$Species)),
+                group = rep(group, 3),
+                species=species
+)
+df <- df %>%
+  mutate(
+    group = case_when(
+      group == "Acti"  ~ "Fish",
+      group == "Amph"  ~ "Amphibians",
+      group == "Aves"  ~ "Perching birds",
+      group == "Dmst"  ~ "Domestic animals",
+      group == "Mamm"  ~ "Mammal",
+       group == "Wafl"  ~ "Waterfowl",
+      TRUE ~ as.character(group)
+    )
+  )
+df$group=factor(df$group,levels=c("Fish","Amphibians","Waterfowl","Perching birds","Domestic animals","Mammal"))
+
+p4=ggplot(df,aes(x=group, y=R2,fill=r2)) + geom_boxplot(notch=T) +theme_classic()+
+  scale_fill_manual(values = cols)+
+geom_point(position = position_jitterdodge(jitter.width =0.1),alpha=0.5,size=1.5)+ylab(expression(paste("Species Partial"," ",R^2)))+ xlab("Trait group")+guides(fill=guide_legend(title=expression(R^2)))
+
+(p2|p1|p3)/p4+plot_layout(tag_level = "new",guides = "collect")+plot_annotation(tag_levels = "A")#+ theme(legend.position='bottom')
+```
+#Figure s4:single covariate with sites' R2
+```{r, single covariate}
+cols = c("#A38310", "#B42398", "#20A382")
+for (i in 1:8) {
+ee = env2[,i]
+nameenv=c("Pond area","Shade","Macrophytes","Pond drying","Water quality","agriculture.urban","woodland","grassland")
+name=nameenv[i]
+data.suniq=data.frame(environmental=rr$data$Sites[,1],spatial=rr$data$Sites[,2],"biotic covariance"=rr$data$Sites[,3])
+data=as.matrix(data.suniq)
+data <- reshape2::melt(data)
+colnames(data)=c("ee","r2","cov")
+data$ee=as.numeric(ee)
+var=paste0("p",i)
+p=ggplot(data,aes(x =ee, y =cov, color = r2))+ xlab(name) + 
+  ylab(expression(paste("Site Partial"," ",R^2))) + 
+  ylim(0, 0.6)+
+  xlim(min(ee), max(ee))+
+  geom_point(alpha=0.2)+scale_color_manual(values = cols)+
+  theme_classic()+
+  geom_line(aes(ee[order(ee)], predict(qgam( Y ~ (ee), data = data.frame(Y = rr$data$Sites[,1], ee = ee), qu = 0.5), newdata = data.frame(ee = ee))[order(ee)]),col = cols[1],lty =2-(summary(qgam( Y ~ (ee), data = data.frame(Y = rr$data$Sites[,1], ee = ee), qu = 0.5))$p.table[2,4] < 0.05))+
+  geom_line(aes(ee[order(ee)], predict(qgam( Y ~ (ee), data = data.frame(Y = rr$data$Sites[,2], ee = ee), qu = 0.5), newdata = data.frame(ee = ee))[order(ee)]),col = cols[2],lty =2-(summary(qgam( Y ~ (ee), data = data.frame(Y = rr$data$Sites[,2], ee = ee), qu = 0.5))$p.table[2,4] < 0.05))+
+  geom_line(aes(ee[order(ee)], predict(qgam( Y ~ (ee), data = data.frame(Y = rr$data$Sites[,3], ee = ee), qu = 0.5), newdata = data.frame(ee = ee))[order(ee)]),col = cols[3], lty =2-(summary(qgam( Y ~ (ee), data = data.frame(Y = rr$data$Sites[,3], ee = ee), qu = 0.5))$p.table[2,4] < 0.05))
+assign(var,p)
+}
+
+p1+p2+p3+p4+p5+p6+p7+p8+ plot_layout(tag_level = "new",guides = "collect")+plot_annotation(tag_levels = "A")
+```
+
+#Figure s5:estimate env. distinctiveness amonge species traits
+```{r}
+cols = c("#A38310", "#B42398", "#20A382")
+group = sapply(strsplit(rownames(rr$data$Species), "_"),function(x) x[[1]])
+
+for(i in 1:6) {
+  gg = unique(group)[i]
+  EE = env_X %*% coefs[,group == gg]
+  D = as.matrix(dist(EE))
+  D = D - rowMeans(D)
+  v = eigen(as.matrix(dist(EE)))$vectors
+  ee = ((v %*% EE)[,1])
+  ee= abs(v[,1])
+  data.suniq=data.frame(environmental=rr$data$Sites[,1],spatial=rr$data$Sites[,2],"biotic covariance"=rr$data$Sites[,3])
+data=as.matrix(data.suniq)
+data <- reshape2::melt(data)
+colnames(data)=c("ee","r2","cov")
+data$ee=as.numeric(ee)
+
+var=paste0("p",i)
+gg=c("Fish","Amphibians","Perching birds","Domestic animals","Mammal","Waterfowl")
+gg=gg[i]
+p=ggplot(data,aes(x =ee, y =cov, color = r2))+ xlab("Enviromental distinctiveness") + 
+  ylab(expression(paste("Site Partial"," ",R^2))) + 
+  ylim(0, 0.6)+
+  xlim(min(ee), max(ee))+
+  geom_point(alpha=0.3)+scale_color_manual(values = cols)+
+  theme_classic()+
+   geom_line(aes(ee[order(ee)], predict(gam( Y ~ (ee), data = data.frame(Y = rr$data$Sites[,1], ee = ee)), newdata = data.frame(ee = ee))[order(ee)]),col = cols[1],lty =2-(summary(gam( Y ~ (ee), data = data.frame(Y = rr$data$Sites[,1], ee = ee)))$p.table[2,4] < 0.05))+
+  geom_line(aes(ee[order(ee)], predict(gam( Y ~ (ee), data = data.frame(Y = rr$data$Sites[,2], ee = ee)), newdata = data.frame(ee = ee))[order(ee)]),col = cols[2],lty =2-(summary(gam( Y ~ (ee), data = data.frame(Y = rr$data$Sites[,2], ee = ee)))$p.table[2,4] < 0.05))+
+  geom_line(aes(ee[order(ee)], predict(gam( Y ~ (ee), data = data.frame(Y = rr$data$Sites[,3], ee = ee)), newdata = data.frame(ee = ee))[order(ee)]),col = cols[3], lty =2-(summary(gam( Y ~ (ee), data = data.frame(Y = rr$data$Sites[,3], ee = ee)))$p.table[2,4] < 0.05))+ggtitle(gg)
+assign(var,p)
+}
+
+p1+p2+p6+p3+p4+p5+ plot_layout(tag_level = "new",guides = "collect")+plot_annotation(tag_levels = "A")#+ theme(legend.position='bottom')
+```
+

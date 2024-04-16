@@ -1,0 +1,49 @@
+species,group,inc.FHT
+Acti_Abramis_brama,Fish,14
+Acti_Carassius_carassius,Fish,26
+Acti_Cyprinus_carpio,Fish,31
+Acti_Esox_lucius,Fish,10
+Acti_Gasterosteus_aculeatus,Fish,64
+Acti_Gobio_gobio,Fish,15
+Acti_Leuciscus_leuciscus,Fish,13
+Acti_Perca_fluviatilis,Fish,16
+Acti_Rutilus_rutilus,Fish,43
+Acti_Tinca_tinca,Fish,11
+Amph_Bufo_bufo,Amphibian,82
+Amph_Lissotriton_helveticus,Amphibian,16
+Amph_Lissotriton_vulgaris,Amphibian,148
+Amph_Rana_temporaria,Amphibian,54
+Amph_Triturus_cristatus,Amphibian,121
+Aves_Columba_livia,Other Bird,21
+Aves_Columbidae_sp.,Other Bird,107
+Aves_Erithacus_rubecula,Other Bird,8
+Aves_Panurus_biarmicus,Other Bird,6
+Aves_Parus_major,Other Bird,16
+Aves_Passeriformes_sp2,Other Bird,12
+Aves_Pica_pica,Other Bird,43
+Aves_Prunella_modularis,Other Bird,6
+Aves_Sturnus_vulgaris,Other Bird,10
+Aves_Sylvia_atricapilla,Other Bird,10
+Aves_Troglodytes_troglodytes,Other Bird,9
+Aves_Turdus_sp.,Other Bird,46
+Dmst_Bos_taurus,Domestic,34
+Dmst_Canis_familiaris,Domestic,29
+Dmst_Gallus_gallus,Domestic,45
+Dmst_Ovis_aries,Domestic,16
+Dmst_Phasianus_colchicus,Domestic,7
+Dmst_Rattus_norvegicus,Domestic,15
+Dmst_Sus_scrofa,Domestic,66
+Mamm_Apodemus_flavicollis,Mammal,7
+Mamm_Microtus_agrestis,Mammal,11
+Mamm_Muntiacus_reevesi,Mammal,8
+Mamm_Myodes_glareolus,Mammal,7
+Mamm_Oryctolagus_cuniculus,Mammal,11
+Mamm_Sciurus_carolinensis,Mammal,23
+Mamm_Sorex_araneus,Mammal,7
+Mamm_Vulpes_vulpes,Mammal,6
+Wafl_Aix_galericulata,Waterfowl,5
+Wafl_Anas_platyrhynchos,Waterfowl,167
+Wafl_Anatidae_sp.,Waterfowl,23
+Wafl_Ardea_cinerea,Waterfowl,8
+Wafl_Fulica_atra,Waterfowl,7
+Wafl_Gallinula_chloropus,Waterfowl,84
